@@ -22,6 +22,7 @@ jobs:
       PROJECT_REF: stable/2024.1
       IMAGE_NAME: ${{ github.event.repository.name }}
       IMAGE_TAG: stable-2024.1
+      DIST_PACKAGES: ceph-common
 
     steps:
       - name: Checkout Nova source
