@@ -20,9 +20,10 @@ jobs:
       PROJECT: nova
       PROJECT_REPO: https://github.com/${{ github.repository }}
       PROJECT_REF: stable/2024.1
+      PROFILES: fluent ceph linuxbridge openvswitch configdrive qemu apache migration
       IMAGE_NAME: ${{ github.event.repository.name }}
       IMAGE_TAG: stable-2024.1
-      DIST_PACKAGES: ceph-common
+      DIST_PACKAGES: net-tools openssh-server
 
     steps:
       - name: Checkout Nova source
@@ -98,7 +99,8 @@ jobs:
             --build-arg PROJECT=${{ env.PROJECT }} \
             --build-arg PROJECT_REPO=${{ env.PROJECT_REPO }} \
             --build-arg PROJECT_REF=${{ env.PROJECT_REF }} \
-            --build-arg DIST_PACKAGES=${{ env.DIST_PACKAGES }} \
+            --build-arg PROFILES='${{ env.PROFILES }}' \
+            --build-arg DIST_PACKAGES='${{ env.DIST_PACKAGES }}' \
             --tag ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
             loci
 
