@@ -70,3 +70,34 @@ be found at:
 
 .. _Summit: https://www.openstack.org/summit/
 .. _Project Team Gathering: https://www.openstack.org/ptg/
+
+
+==================================================
+Extending Nova for AI Accelerator-Aware Scheduling
+==================================================
+
+This branch extends OpenStack Nova (stable/2024.1) to support AI accelerators
+such as NPUs, PIMs, and PGPUs through intelligent scheduling based on resource
+availability.
+
+Key Features
+------------
+
+* **AI Accelerator-Aware Scheduling**  
+  Enhances Nova’s scheduler to prioritize hosts with more available
+  accelerator resources, improving performance for AI workloads.
+
+* **Placement Integration**  
+  Uses Nova’s ``SchedulerReportClient`` to directly query Placement for
+  up-to-date resource information without relying on caching or background agents.
+
+* **Cyborg Collaboration**  
+  Works seamlessly with OpenStack Cyborg by using its Device Profiles,
+  traits, and resource classes for scheduling decisions.
+
+Development and Customization
+-----------------------------
+
+Developers can review and extend the weigher logic in the ``nova/scheduler/weights/accelerator.py`` file.  
+The implementation includes logic for resource-based host scoring and supports custom configuration through ``nova.conf``.
+
