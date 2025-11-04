@@ -1,0 +1,25 @@
+conf:
+  nova:
+    filter_scheduler:
+      weight_classes: "nova.scheduler.weights.all_weighers,nova.scheduler.weights.accelerator.AcceleratorWeigher"
+    accelerator_weigher:
+      # 결합 방식: harmonic 또는 min
+      combine: harmonic
+      # 대상 RC 정규식 (대소문자 무시)
+      rc_pattern: "(?i)^(CUSTOM_)?(FPGA|PGPU|VGPU|QAT|NIC|SSD|AICHIP)$"
+      http_timeout: 3
+      in_tree_page_limit: 1000
+      prefer_more_free: true
+    DEFAULT:
+      log_config_append: null
+#  logging:
+#    keys:
+#      - root
+#      - nova
+#      - nova_scheduler
+#      - os.brick
+#    logger_nova_scheduler:
+#      level: DEBUG
+#      handlers:
+#        - stdout
+#      qualname: nova.scheduler
