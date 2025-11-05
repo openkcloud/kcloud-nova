@@ -7,8 +7,8 @@ Accelerator Weigher (group-based with RC+traits; best/worst-fit & product polici
 - Policies:
     best-fit       : sum of per-group min slack (smaller is better)  -> score = -sum
     worst-fit      : sum of per-group min slack (larger is better)   -> score = +sum
-    product-best   : sum of per-group product of RC slacks (smaller) -> score = -sum
-    product-worst  : sum of per-group product of RC slacks (larger)  -> score = +sum
+    product-best   : sum of per-group product of RC slacks (smaller) -> score = -sum(with epsilon)
+    product-worst  : sum of per-group product of RC slacks (larger)  -> score = +sum(with epsilon)
 - Any unmet group (any RC slack <= 0) => score=0 (weigher does not filter, only de-prioritizes).
 - Placement access via Nova's SchedulerReportClient singleton.
 
@@ -91,7 +91,7 @@ def _lookup_root_rp_uuid(client: placement_report.SchedulerReportClient, host_st
         _trace("Host has no name; cannot lookup root RP")
         stats["errors"].append("no-hostname")
         return None
-    
+
     t0 = time.time()
     url = f"/resource_providers?name={name}"
     _trace("HTTP GET %s", url)
@@ -101,7 +101,7 @@ def _lookup_root_rp_uuid(client: placement_report.SchedulerReportClient, host_st
     _trace("HTTP RESP %s -> %s (%.1f ms)", url, code, dt)
     stats["http_calls"] = stats.get("http_calls", 0) + 1
     stats["http_times_ms"] = stats.get("http_times_ms", 0.0) + dt
-    
+
     if resp.status_code != 200:
         LOG.debug("RP lookup failed for %s: %s %s", name, resp.status_code, getattr(resp, "text", "?"))
         stats["errors"].append(f"rp-lookup-{resp.status_code}")
@@ -116,15 +116,15 @@ def _lookup_root_rp_uuid(client: placement_report.SchedulerReportClient, host_st
 
 def _get_provider_tree_and_usages(client: placement_report.SchedulerReportClient, root_uuid: str, stats: Dict) -> Tuple[Optional[provider_tree.ProviderTree], Dict[str, Dict[str, float]]]:
     """Get ProviderTree using get_provider_tree_and_ensure_root() and collect usages.
-    
+
     Returns:
         Tuple of (ProviderTree, usages_dict) where usages_dict maps rp_uuid -> {rc: usage}
     """
     _trace("Get ProviderTree for root=%s using get_provider_tree_and_ensure_root", root_uuid)
-    
+
     # Create a minimal context for the API call
     ctx = context.get_context()
-    
+
     # Get ProviderTree with all inventories and traits populated
     t0 = time.time()
     try:
@@ -136,7 +136,7 @@ def _get_provider_tree_and_usages(client: placement_report.SchedulerReportClient
         LOG.debug("Failed to get ProviderTree: %s", e, exc_info=True)
         stats["errors"].append(f"get-tree-{type(e).__name__}")
         return None, {}
-    
+
     # Get provider UUIDs in tree
     try:
         provider_uuids = ptree.get_provider_uuids_in_tree(root_uuid)
@@ -146,13 +146,13 @@ def _get_provider_tree_and_usages(client: placement_report.SchedulerReportClient
         LOG.debug("Root %s not found in ProviderTree", root_uuid)
         stats["errors"].append("root-not-in-tree")
         return None, {}
-    
+
     # Collect usage information (not included in ProviderTree)
     usages_dict = {}  # rp_uuid -> {rc: usage}
     for rp_uuid in provider_uuids:
         if rp_uuid == root_uuid:
             continue
-        
+
         t0 = time.time()
         usage_url = f"/resource_providers/{rp_uuid}/usages"
         _trace("HTTP GET %s", usage_url)
@@ -160,40 +160,40 @@ def _get_provider_tree_and_usages(client: placement_report.SchedulerReportClient
         dt = (time.time() - t0) * 1000.0
         stats["http_calls"] = stats.get("http_calls", 0) + 1
         stats["http_times_ms"] = stats.get("http_times_ms", 0.0) + dt
-        
+
         if usage_resp.status_code == 200:
             usages = (usage_resp.json() or {}).get("usages", {}) or {}
             usages_dict[rp_uuid] = usages
-    
+
     return ptree, usages_dict
 
 
 def _get_free_for_rc_from_tree(ptree: provider_tree.ProviderTree, rp_uuid: str, rc_name: str, usages_dict: Dict[str, Dict[str, float]], stats: Dict) -> float:
     """Compute free units for RC on RP using ProviderTree data: max(total - reserved - used, 0)."""
     _trace("Compute free for RP=%s RC=%s", rp_uuid, rc_name)
-    
+
     try:
         prov_data = ptree.data(rp_uuid)
     except ValueError:
         _trace("RP=%s not found in tree", rp_uuid)
         stats["rc_miss"] = stats.get("rc_miss", 0) + 1
         return 0.0
-    
+
     # Get inventory from ProviderTree
     inventory = prov_data.inventory.get(rc_name)
     if not inventory:
         _trace("RP=%s has no inventory for RC=%s", rp_uuid, rc_name)
         stats["rc_miss"] = stats.get("rc_miss", 0) + 1
         return 0.0
-    
+
     total = float(inventory.get("total", 0))
     reserved = float(inventory.get("reserved", 0))
     _trace("Inventory RP=%s RC=%s total=%.3f reserved=%.3f", rp_uuid, rc_name, total, reserved)
-    
+
     # Get usage from usages_dict
     used = float(usages_dict.get(rp_uuid, {}).get(rc_name, 0))
     _trace("Usage RP=%s RC=%s used=%.3f", rp_uuid, rc_name, used)
-    
+
     free = total - reserved - used
     free = free if free > 0 else 0.0
     _trace("Free RP=%s RC=%s -> %.3f", rp_uuid, rc_name, free)
@@ -206,17 +206,17 @@ def _get_free_for_rc_from_tree(ptree: provider_tree.ProviderTree, rp_uuid: str, 
 
 def _extract_accel_groups(weight_properties, rc_regex: re.Pattern, stats: Dict) -> List[Tuple[Dict[str, int], Set[str]]]:
     """Extract accelerator-related request groups from RequestSpec.
-    
+
     weight_properties is a RequestSpec object with requested_resources field.
     Returns: [(resources{rc:amount}, required_traits_set), ...]
     """
     groups_out: List[Tuple[Dict[str, int], Set[str]]] = []
-    
+
     # weight_properties is already a RequestSpec object
     groups = getattr(weight_properties, "requested_resources", None) or []
     stats["groups_seen"] = len(groups)
     _trace("Extract groups: found %d request groups", len(groups))
-    
+
     for idx, g in enumerate(groups):
         # RequestGroup has 'resources' (dict) and 'required_traits' (set) fields
         resources = getattr(g, "resources", None) or {}
@@ -228,19 +228,19 @@ def _extract_accel_groups(weight_properties, rc_regex: re.Pattern, stats: Dict) 
                 except (ValueError, TypeError):
                     _trace("Group[%d] RC=%s invalid amount=%r; skipping", idx, rc, amount)
                     stats["invalid_amounts"] = stats.get("invalid_amounts", 0) + 1
-        
+
         # required_traits is already a set in RequestGroup
         req_traits = getattr(g, "required_traits", None) or set()
         if isinstance(req_traits, list):
             req_traits = set(req_traits)
-        
+
         if accel_resources:
             groups_out.append((accel_resources, req_traits))
             _trace("Group[%d] accel_resources=%s required_traits=%s", idx, accel_resources, sorted(req_traits))
         else:
             _trace("Group[%d] skipped (no accel RC)", idx)
             stats["groups_skipped_no_accel"] = stats.get("groups_skipped_no_accel", 0) + 1
-    
+
     stats["groups_accel"] = len(groups_out)
     return groups_out
 
@@ -258,7 +258,7 @@ def _sum_free_for_rc_with_traits(
     """Sum free units for (RC + required_traits) across child RPs using ProviderTree."""
     _trace("Sum free across tree: RC=%s required_traits=%s", rc_name, sorted(required_traits))
     total_free = 0.0
-    
+
     # Get all provider UUIDs in tree (excluding root)
     try:
         provider_uuids = ptree.get_provider_uuids_in_tree(root_uuid)
@@ -266,7 +266,7 @@ def _sum_free_for_rc_with_traits(
         _trace("Root %s not found in tree", root_uuid)
         stats["errors"].append("root-not-in-tree")
         return 0.0
-    
+
     stats["providers_iterated"] = stats.get("providers_iterated", 0) + len(provider_uuids)
     _trace("Traversing %d providers under root=%s", len(provider_uuids), root_uuid)
 
@@ -339,17 +339,18 @@ def _group_product(
 ) -> float:
     """Return product of per-RC slacks for a group (0 if any RC unmet)."""
     _trace("Compute group_product for resources=%s traits=%s", accel_resources, sorted(required_traits))
+    eps = 1e-6
     prod = 1.0
     for rc, amount in accel_resources.items():
         free_total = _sum_free_for_rc_with_traits(ptree, root_uuid, rc, required_traits, usages_dict, stats=stats)
         slack = free_total - float(amount)
         _trace("RC=%s required=%.3f free_total=%.3f slack=%.3f", rc, float(amount), free_total, slack)
-        if slack <= 0:
-            _trace("group_product -> 0 (unmet RC=%s)", rc)
+        if slack < 0:
+            _trace("group_product -> 0 (unmet RC=%s; slack<0)", rc)
             stats["groups_product_unmet"] = stats.get("groups_product_unmet", 0) + 1
             return 0.0
-        prod *= slack
-    _trace("group_product -> %.6f", prod)
+        prod *= (slack + eps)
+    _trace("group_product (eps=%.6g) -> %.6f", eps, prod)
     return prod
 
 
@@ -413,16 +414,14 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
             gp = _group_product(ptree, root_uuid, accel_resources, req_traits, usages_dict, stats=stats)
             group_min_slacks.append(gs_min)
             group_products.append(gp)
-            if gs_min < 0 or gp == 0.0:
-                any_unmet = True
             _trace("group[%d] -> min_slack=%.3f product=%.6f", idx, gs_min, gp)
 
-        if any_unmet:
+        # Unmet if any group's min_slack < 0 (product may be small but non-zero due to epsilon)
+        if any(gs < 0 for gs in group_min_slacks):
             LOG.debug(
                 "Group unmet; host=%s min_slacks=%s products=%s -> score=0",
-                host_name, group_min_slacks, group_products
+                getattr(host_state, "host", "?"), group_min_slacks, group_products
             )
-            _trace("==== weigh_object END (unmet group -> score=0) host=%r ====", host_name)
             # Summary stats
             stats["final_score"] = 0.0
             stats["host"] = host_name
@@ -433,6 +432,7 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
             stats["groups_products"] = group_products
             stats["duration_ms"] = (time.time() - t_start) * 1000.0
             _trace("STATS SUMMARY:\n%s", pprint.pformat(stats))
+            _trace("==== weigh_object END (unmet group -> score=0) host=%r ====", host_name)
             return 0.0
 
         policy = CONF.accelerator_weigher.policy
