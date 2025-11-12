@@ -7,8 +7,8 @@ Accelerator Weigher (group-based with RC+traits; best/worst-fit & product polici
 - Policies:
     best-fit       : sum of per-group sum of RC slacks (smaller is better)  -> score = -sum(sum)
     worst-fit      : sum of per-group sum of RC slacks (larger is better)   -> score = +sum(sum)
-    product-best   : sum of per-group product of RC slacks (smaller) -> score = -sum(product with epsilon)
-    product-worst  : sum of per-group product of RC slacks (larger)  -> score = +sum(product with epsilon)
+    best-product   : sum of per-group product of RC slacks (smaller) -> score = -sum(product with epsilon)
+    worst-product  : sum of per-group product of RC slacks (larger)  -> score = +sum(product with epsilon)
 - Placement access via Nova's SchedulerReportClient singleton.
 
 Tracing:
@@ -42,10 +42,10 @@ _ACCEL_OPTS = [
     cfg.StrOpt(
         "policy",
         default="best-fit",
-        choices=["best-fit", "worst-fit", "product-best", "product-worst"],
+        choices=["best-fit", "worst-fit", "best-product", "worst-product"],
         help=("Scoring policy: "
-              "best/worst-fit (sum of per-group min slack) or "
-              "product-best/product-worst (sum of products of per-RC slacks)."),
+              "best/worst-fit (sum of per-group sum of RC slacks) or "
+              "best/worst-product (sum of per-group product of RC slacks)."),
     ),
     cfg.FloatOpt(
         "accelerator_weight_multiplier",
@@ -440,9 +440,9 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
             total_slack = sum(gs for gs in group_slacks if gs > 0)
             score = -total_slack if policy == "best-fit" else total_slack
             _trace("policy=%s total_slack=%.6f score(before mult)=%.6f", policy, total_slack, score)
-        else:  # product-best / product-worst
+        else:  # best-product / worst-product
             total_prod = sum(group_products)
-            score = -total_prod if policy == "product-best" else total_prod
+            score = -total_prod if policy == "best-product" else total_prod
             _trace("policy=%s total_product=%.6f score(before mult)=%.6f", policy, total_prod, score)
 
         LOG.debug(
