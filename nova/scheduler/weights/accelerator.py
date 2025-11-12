@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Accelerator Weigher (group-based with RC+traits; best/worst-fit & product policies)
+Accelerator Weigher (group-based with RC+traits; sum-fit & product-fit policies)
 -----------------------------------------------------------------------------------
 - Per RequestGroup calculation using Placement data.
 - "RC+traits" basis: an RP must both hold the RC inventory AND satisfy traits.
 - Policies:
-    best-fit       : sum of per-group sum of RC slacks (smaller is better)  -> score = -sum(sum)
-    worst-fit      : sum of per-group sum of RC slacks (larger is better)   -> score = +sum(sum)
-    best-product   : sum of per-group product of RC slacks (smaller) -> score = -sum(product with epsilon)
-    worst-product  : sum of per-group product of RC slacks (larger)  -> score = +sum(product with epsilon)
+    sum-fit      : sum of per-group sum of RC slacks -> score = sum(sum)
+    product-fit  : sum of per-group product of RC slacks -> score = sum(product with epsilon)
 - Placement access via Nova's SchedulerReportClient singleton.
 
 Tracing:
@@ -41,11 +39,11 @@ _ACCEL_OPTS = [
     ),
     cfg.StrOpt(
         "policy",
-        default="best-fit",
-        choices=["best-fit", "worst-fit", "best-product", "worst-product"],
+        default="sum-fit",
+        choices=["sum-fit", "product-fit"],
         help=("Scoring policy: "
-              "best/worst-fit (sum of per-group sum of RC slacks) or "
-              "best/worst-product (sum of per-group product of RC slacks)."),
+              "sum-fit (sum of per-group sum of RC slacks) or "
+              "product-fit (sum of per-group product of RC slacks)."),
     ),
     cfg.FloatOpt(
         "accelerator_weight_multiplier",
@@ -436,13 +434,13 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
             return UNMET_FLOOR
 
         policy = CONF.accelerator_weigher.policy
-        if policy in ("best-fit", "worst-fit"):
+        if policy in ("sum-fit"):
             total_slack = sum(gs for gs in group_slacks if gs > 0)
-            score = -total_slack if policy == "best-fit" else total_slack
+            score = total_slack
             _trace("policy=%s total_slack=%.6f score(before mult)=%.6f", policy, total_slack, score)
-        else:  # best-product / worst-product
+        else:  # product-fit
             total_prod = sum(group_products)
-            score = -total_prod if policy == "best-product" else total_prod
+            score = total_prod
             _trace("policy=%s total_product=%.6f score(before mult)=%.6f", policy, total_prod, score)
 
         LOG.debug(
