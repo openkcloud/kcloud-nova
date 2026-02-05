@@ -45,7 +45,7 @@ _ACCEL_OPTS = [
         choices=["sum-fit", "product-fit"],
         help=("Scoring policy: "
               "sum-fit (sum of group slacks) or "
-              "product-fit (product of (group_slack + epsilon) over groups)."),
+              "product-fit (product of group_slacks with epsilon)."),
     ),
     cfg.FloatOpt(
         "accelerator_weight_multiplier",
