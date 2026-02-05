@@ -19,7 +19,7 @@ jobs:
           package-type: container
           min-versions-to-keep: 4
           delete-only-untagged-versions: true
-          token: ${{ secrets.CR_PAT }}
+          token: ${{ secrets.CR_PAT_RWD }}
 
   build-and-push:
     if: github.repository_owner == 'openkcloud'
