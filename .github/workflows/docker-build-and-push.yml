@@ -7,7 +7,6 @@ on:
 
 jobs:
   cleanup-ghcr:
-    needs: build-and-push
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -24,6 +23,7 @@ jobs:
   build-and-push:
     if: github.repository_owner == 'openkcloud'
     
+    needs: cleanup-ghcr
     runs-on: ubuntu-latest
 
     env:
