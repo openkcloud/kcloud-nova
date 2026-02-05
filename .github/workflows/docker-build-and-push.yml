@@ -17,8 +17,9 @@ jobs:
           owner: ${{ github.repository_owner }}
           package-name: ${{ github.event.repository.name }}
           package-type: container
-          min-versions-to-keep: 5
+          min-versions-to-keep: 4
           delete-only-untagged-versions: true
+          num-old-versions-to-delete: 10
 
   build-and-push:
     if: github.repository_owner == 'openkcloud'
