@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
+      LOCI_REF: 132501bd9bb0f5c989690e1ae3d4d0dedeaf6f78
       BASE_IMAGE_NAME: kcloud-nova_base
       BASE_IMAGE_TAG: ubuntu_jammy
       REQUIREMENTS_IMAGE_NAME: kcloud-nova_requirements
@@ -29,9 +30,13 @@ jobs:
       - name: Checkout Nova source
         uses: actions/checkout@v3
 
-      - name: Clone LOCI
-        run: git clone https://opendev.org/openstack/loci.git
-
+      - name: Clone LOCI (pinned)
+        run: |
+          git clone https://opendev.org/openstack/loci.git
+          cd loci
+          git checkout ${{ env.LOCI_REF }}
+          echo "LOCI pinned to: $(git rev-parse HEAD)"
+          
       # TODO: Create a PAT with `read:packages` and `write:packages` scopes and save it as an Actions secret `CR_PAT`
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
