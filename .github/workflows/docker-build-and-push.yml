@@ -59,7 +59,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.CR_PAT }}
+          password: ${{ secrets.CR_PAT_RWD }}
 
       - name: Check if Base image exists in GHCR
         id: check-base-image
