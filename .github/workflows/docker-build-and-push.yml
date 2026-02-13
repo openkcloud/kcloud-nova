@@ -17,7 +17,7 @@ jobs:
       BASE_IMAGE_TAG: ubuntu_jammy
       REQUIREMENTS_IMAGE_NAME: kcloud-nova_requirements
       REQUIREMENTS_IMAGE_TAG: stable-2024.1-ubuntu_jammy
-      REQUIREMENTS_REF: stable/2024.1
+      REQUIREMENTS_REF: 2024.1-eom
       PROJECT: nova
       PROJECT_REPO: https://github.com/${{ github.repository }}
       PROJECT_REF: stable/2024.1
