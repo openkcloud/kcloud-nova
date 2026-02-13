@@ -87,6 +87,7 @@ jobs:
             --build-arg FROM=ghcr.io/${{ github.repository_owner }}/${{ env.BASE_IMAGE_NAME }}:${{ env.BASE_IMAGE_TAG }} \
             --build-arg PROJECT=requirements \
             --build-arg PROJECT_REF=${{ env.REQUIREMENTS_REF }} \
+            --build-arg KEEP_ALL_WHEELS=yes \
             --tag ghcr.io/${{ github.repository_owner }}/${{ env.REQUIREMENTS_IMAGE_NAME }}:${{ env.REQUIREMENTS_IMAGE_TAG }} \
             loci
 
@@ -106,6 +107,7 @@ jobs:
             --build-arg PROJECT_REF=${{ env.PROJECT_REF }} \
             --build-arg PROFILES='${{ env.PROFILES }}' \
             --build-arg DIST_PACKAGES='${{ env.DIST_PACKAGES }}' \
+            --build-arg KEEP_ALL_WHEELS=yes \
             --tag ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
             loci
 
