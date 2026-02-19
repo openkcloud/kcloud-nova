@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      LOCI_REF: kcloud/2024.1
+      KCLOUD_LOCI_REF: kcloud/2024.1
       BASE_IMAGE_NAME: kcloud-base
       BASE_IMAGE_TAG: ubuntu_jammy
       REQUIREMENTS_REPO: https://github.com/openkcloud/kcloud-requirements
@@ -31,9 +31,9 @@ jobs:
       - name: Checkout Nova source
         uses: actions/checkout@v3
 
-      - name: Clone LOCI
+      - name: Clone kcloud-loci
         run: |
-          git clone -b ${{ env.LOCI_REF }} https://github.com/openkcloud/kcloud-loci
+          git clone -b ${{ env.KCLOUD_LOCI_REF }} https://github.com/openkcloud/kcloud-loci
           cd kcloud-loci
           
       # TODO: Create a PAT with `read:packages` and `write:packages` scopes and save it as an Actions secret `CR_PAT`
@@ -57,7 +57,7 @@ jobs:
         if: steps.check-base-image.outputs.exists == 'false'
         run: |
           docker build \
-            -f loci/Dockerfile.base \
+            -f kcloud-loci/Dockerfile.base \
             --build-arg FROM=ubuntu:jammy \
             --build-arg CEPH_REPO='deb https://download.ceph.com/debian-reef/ jammy main' \
             --tag ghcr.io/${{ github.repository_owner }}/${{ env.BASE_IMAGE_NAME }}:${{ env.BASE_IMAGE_TAG }} \
@@ -81,7 +81,7 @@ jobs:
         if: steps.check-requirements-image.outputs.exists == 'false'
         run: |
           docker build \
-            -f loci/Dockerfile \
+            -f kcloud-loci/Dockerfile \
             --target requirements \
             --build-arg FROM=ghcr.io/${{ github.repository_owner }}/${{ env.BASE_IMAGE_NAME }}:${{ env.BASE_IMAGE_TAG }} \
             --build-arg PROJECT=requirements \
@@ -89,7 +89,7 @@ jobs:
             --build-arg PROJECT_REF=${{ env.REQUIREMENTS_REF }} \
             --build-arg KEEP_ALL_WHEELS=yes \
             --tag ghcr.io/${{ github.repository_owner }}/${{ env.REQUIREMENTS_IMAGE_NAME }}:${{ env.REQUIREMENTS_IMAGE_TAG }} \
-            loci
+            kcloud-loci
 
       - name: Push Requirements image to GHCR
         if: steps.check-requirements-image.outputs.exists == 'false'
@@ -99,7 +99,7 @@ jobs:
       - name: Build Nova image
         run: |
           docker build \
-            -f loci/Dockerfile \
+            -f kcloud-loci/Dockerfile \
             --build-arg FROM=ghcr.io/${{ github.repository_owner }}/${{ env.BASE_IMAGE_NAME }}:${{ env.BASE_IMAGE_TAG }} \
             --build-arg WHEELS=ghcr.io/${{ github.repository_owner }}/${{ env.REQUIREMENTS_IMAGE_NAME }}:${{ env.REQUIREMENTS_IMAGE_TAG }} \
             --build-arg PROJECT=${{ env.PROJECT }} \
@@ -109,7 +109,7 @@ jobs:
             --build-arg DIST_PACKAGES='${{ env.DIST_PACKAGES }}' \
             --build-arg KEEP_ALL_WHEELS=yes \
             --tag ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
-            loci
+            kcloud-loci
 
       - name: Push Nova image to GHCR
         run: |
