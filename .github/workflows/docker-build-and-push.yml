@@ -12,12 +12,13 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      LOCI_REF: 132501bd9bb0f5c989690e1ae3d4d0dedeaf6f78
-      BASE_IMAGE_NAME: kcloud-nova_base
+      LOCI_REF: kcloud/2024.1
+      BASE_IMAGE_NAME: kcloud-base
       BASE_IMAGE_TAG: ubuntu_jammy
-      REQUIREMENTS_IMAGE_NAME: kcloud-nova_requirements
-      REQUIREMENTS_IMAGE_TAG: stable-2024.1-ubuntu_jammy
-      REQUIREMENTS_REF: 2024.1-eom
+      REQUIREMENTS_REPO: https://github.com/openkcloud/kcloud-requirements
+      REQUIREMENTS_IMAGE_NAME: kcloud-requirements
+      REQUIREMENTS_IMAGE_TAG: kcloud-2024.1-ubuntu_jammy
+      REQUIREMENTS_REF: kcloud/2024.1
       PROJECT: nova
       PROJECT_REPO: https://github.com/${{ github.repository }}
       PROJECT_REF: stable/2024.1
@@ -30,12 +31,10 @@ jobs:
       - name: Checkout Nova source
         uses: actions/checkout@v3
 
-      - name: Clone LOCI (pinned)
+      - name: Clone LOCI
         run: |
-          git clone https://opendev.org/openstack/loci.git
-          cd loci
-          git checkout ${{ env.LOCI_REF }}
-          echo "LOCI pinned to: $(git rev-parse HEAD)"
+          git clone -b ${{ env.LOCI_REF }} https://github.com/openkcloud/kcloud-loci
+          cd kcloud-loci
           
       # TODO: Create a PAT with `read:packages` and `write:packages` scopes and save it as an Actions secret `CR_PAT`
       - name: Login to GitHub Container Registry
@@ -62,7 +61,7 @@ jobs:
             --build-arg FROM=ubuntu:jammy \
             --build-arg CEPH_REPO='deb https://download.ceph.com/debian-reef/ jammy main' \
             --tag ghcr.io/${{ github.repository_owner }}/${{ env.BASE_IMAGE_NAME }}:${{ env.BASE_IMAGE_TAG }} \
-            loci
+            kcloud-loci
 
       - name: Push Base image to GHCR
         if: steps.check-base-image.outputs.exists == 'false'
@@ -86,6 +85,7 @@ jobs:
             --target requirements \
             --build-arg FROM=ghcr.io/${{ github.repository_owner }}/${{ env.BASE_IMAGE_NAME }}:${{ env.BASE_IMAGE_TAG }} \
             --build-arg PROJECT=requirements \
+            --build-arg PROJECT_REPO=${{ env.REQUIREMENTS_REPO }} \
             --build-arg PROJECT_REF=${{ env.REQUIREMENTS_REF }} \
             --build-arg KEEP_ALL_WHEELS=yes \
             --tag ghcr.io/${{ github.repository_owner }}/${{ env.REQUIREMENTS_IMAGE_NAME }}:${{ env.REQUIREMENTS_IMAGE_TAG }} \
