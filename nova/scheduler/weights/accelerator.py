@@ -22,8 +22,8 @@ import pprint
 from typing import Dict, List, Optional, Tuple, Set
 from urllib.parse import quote
 
-from oslo_config import cfg
 from oslo_log import log as logging
+import nova.conf
 from nova import context
 from nova.compute import provider_tree
 from nova.scheduler import weights
@@ -31,37 +31,7 @@ from nova.scheduler.client import report as placement_report
 
 LOG = logging.getLogger(__name__)
 
-_ACCEL_OPTS = [
-    cfg.StrOpt(
-        "rc_pattern",
-        default=r"(?i)^(CUSTOM_)?(FPGA|PGPU|VGPU|QAT|NIC|SSD|AICHIP)$",
-        help=(
-            "Regex to identify accelerator RCs included in scoring. "
-            "Matches: FPGA, PGPU, VGPU, CUSTOM_QAT, CUSTOM_NIC, CUSTOM_SSD, CUSTOM_AICHIP."
-        ),
-    ),
-    cfg.StrOpt(
-        "policy",
-        default="sum-fit",
-        choices=["sum-fit", "product-fit"],
-        help=("Scoring policy: "
-              "sum-fit (sum of group slacks) or "
-              "product-fit (product of group_slacks with epsilon)."),
-    ),
-    cfg.FloatOpt(
-        "accelerator_weight_multiplier",
-        default=1.0,
-        help="Multiplier applied to the final accelerator score.",
-    ),
-    cfg.BoolOpt(
-        "trace",
-        default=False,
-        help="Emit verbose DEBUG logs for detailed flow tracing.",
-    ),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(_ACCEL_OPTS, group="accelerator_weigher")
+CONF = nova.conf.CONF
 
 EPS = 1e-6
 UNMET_FLOOR = -1e6
