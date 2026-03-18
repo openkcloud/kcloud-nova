@@ -26,6 +26,7 @@ from oslo_log import log as logging
 import nova.conf
 from nova import context
 from nova.compute import provider_tree
+from nova.scheduler import utils
 from nova.scheduler import weights
 from nova.scheduler.client import report as placement_report
 
@@ -336,7 +337,14 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
         return super().weigh_objects(weighed_obj_list, weight_properties)
 
     def weight_multiplier(self, host_state):
-        return CONF.accelerator_weigher.accelerator_weight_multiplier
+        """Override the weight multiplier.
+
+        Reads ``accelerator_weight_multiplier`` from aggregate metadata
+        to allow per-aggregate override, falling back to the config value.
+        """
+        return utils.get_weight_multiplier(
+            host_state, 'accelerator_weight_multiplier',
+            CONF.accelerator_weigher.accelerator_weight_multiplier)
 
     def _weigh_object(self, host_state, weight_properties):
         """Score host per policy.
