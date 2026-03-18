@@ -20,6 +20,7 @@ import re
 import time
 import pprint
 from typing import Dict, List, Optional, Tuple, Set
+from urllib.parse import quote
 
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -63,7 +64,20 @@ CONF = cfg.CONF
 CONF.register_opts(_ACCEL_OPTS, group="accelerator_weigher")
 
 EPS = 1e-6
-UNMET_FLOOR = float("-inf")
+UNMET_FLOOR = -1e6
+
+_rc_regex_cache = None
+_rc_regex_pattern = None
+
+
+def _get_rc_regex() -> re.Pattern:
+    """Return compiled regex for rc_pattern, cached across calls."""
+    global _rc_regex_cache, _rc_regex_pattern
+    pattern = CONF.accelerator_weigher.rc_pattern
+    if _rc_regex_cache is None or pattern != _rc_regex_pattern:
+        _rc_regex_cache = re.compile(pattern)
+        _rc_regex_pattern = pattern
+    return _rc_regex_cache
 
 # ------------------------------ trace helper ------------------------------
 
@@ -94,7 +108,7 @@ def _lookup_root_rp_uuid(client: placement_report.SchedulerReportClient, host_st
         return None
 
     t0 = time.time()
-    url = f"/resource_providers?name={name}"
+    url = f"/resource_providers?name={quote(name)}"
     _trace("HTTP GET %s", url)
     resp = client.get(url)
     dt = (time.time() - t0) * 1000.0
@@ -255,18 +269,20 @@ def _sum_free_for_rc_with_traits(
     required_traits: Set[str],
     usages_dict: Dict[str, Dict[str, float]],
     stats: Dict,
+    provider_uuids: Optional[List[str]] = None,
 ) -> float:
     """Sum free units for (RC + required_traits) across child RPs using ProviderTree."""
     _trace("Sum free across tree: RC=%s required_traits=%s", rc_name, sorted(required_traits))
     total_free = 0.0
 
-    # Get all provider UUIDs in tree (excluding root)
-    try:
-        provider_uuids = ptree.get_provider_uuids_in_tree(root_uuid)
-    except ValueError:
-        _trace("Root %s not found in tree", root_uuid)
-        stats["errors"].append("root-not-in-tree")
-        return 0.0
+    # Reuse pre-fetched provider UUIDs if available
+    if provider_uuids is None:
+        try:
+            provider_uuids = ptree.get_provider_uuids_in_tree(root_uuid)
+        except ValueError:
+            _trace("Root %s not found in tree", root_uuid)
+            stats["errors"].append("root-not-in-tree")
+            return 0.0
 
     stats["providers_iterated"] = stats.get("providers_iterated", 0) + len(provider_uuids)
     _trace("Traversing %d providers under root=%s", len(provider_uuids), root_uuid)
@@ -313,12 +329,13 @@ def _group_slack(
     required_traits: Set[str],
     usages_dict: Dict[str, Dict[str, float]],
     stats: Dict,
+    provider_uuids: Optional[List[str]] = None,
 ) -> float:
     """Compute group slack: sum over RC of (total_free_rc - required_rc)."""
     _trace("Compute group_slack for resources=%s traits=%s", accel_resources, sorted(required_traits))
     slacks: List[float] = []
     for rc, amount in accel_resources.items():
-        free_total = _sum_free_for_rc_with_traits(ptree, root_uuid, rc, required_traits, usages_dict, stats=stats)
+        free_total = _sum_free_for_rc_with_traits(ptree, root_uuid, rc, required_traits, usages_dict, stats=stats, provider_uuids=provider_uuids)
         slack = free_total - float(amount)
         _trace("RC=%s required=%.3f free_total=%.3f slack=%.3f", rc, float(amount), free_total, slack)
         slacks.append(slack)
@@ -334,6 +351,8 @@ def _group_slack(
 
 class AcceleratorWeigher(weights.BaseHostWeigher):
     """Weigher scoring hosts using group-based RC+traits calculation and chosen policy."""
+
+    minval = 0
 
     def weight_multiplier(self, host_state):
         return CONF.accelerator_weigher.accelerator_weight_multiplier
@@ -364,7 +383,7 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
 
         t_start = time.time()
         client = _get_client()
-        rc_regex = re.compile(CONF.accelerator_weigher.rc_pattern)
+        rc_regex = _get_rc_regex()
 
         root_uuid = _lookup_root_rp_uuid(client, host_state, stats=stats)
         if not root_uuid:
@@ -385,11 +404,18 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
             _trace("==== weigh_object END (no ProviderTree) host=%r ====", host_name)
             return 0.0
 
+        # Pre-fetch provider UUIDs once for reuse across all groups
+        try:
+            provider_uuids = ptree.get_provider_uuids_in_tree(root_uuid)
+        except ValueError:
+            LOG.debug("Root %s not found in ProviderTree", root_uuid)
+            return 0.0
+
         group_slacks: List[float] = []
 
         for idx, (accel_resources, req_traits) in enumerate(groups):
             _trace("Processing group[%d] on host=%s ...", idx, host_name)
-            gs = _group_slack(ptree, root_uuid, accel_resources, req_traits, usages_dict, stats=stats)
+            gs = _group_slack(ptree, root_uuid, accel_resources, req_traits, usages_dict, stats=stats, provider_uuids=provider_uuids)
             group_slacks.append(gs)
             _trace("group[%d] -> slack=%.3f", idx, gs)
 
@@ -397,7 +423,7 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
         if any(gs == UNMET_FLOOR for gs in group_slacks):
             LOG.debug(
                 "Group unmet; host=%s slacks=%s -> score=%f",
-                getattr(host_state, "host", "?"), group_slacks
+                getattr(host_state, "host", "?"), group_slacks, UNMET_FLOOR
             )
             # Summary stats
             stats["final_score"] = UNMET_FLOOR
@@ -413,9 +439,8 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
 
         policy = CONF.accelerator_weigher.policy
         if policy == "sum-fit":
-            total_slack = sum(gs for gs in group_slacks if gs > 0)
-            score = total_slack
-            _trace("policy=%s total_slack=%.6f score(before mult)=%.6f", policy, total_slack, score)
+            score = sum(group_slacks)
+            _trace("policy=%s score(before mult)=%.6f", policy, score)
         else:  # product-fit: product of (slack + EPS) over groups (EPS avoids 0)
             score = 1.0
             for gs in group_slacks:
