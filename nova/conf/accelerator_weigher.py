@@ -90,6 +90,43 @@ Related options:
 
 * ``[filter_scheduler] weight_classes``
 """),
+    cfg.IntOpt(
+        "usage_cache_seconds",
+        default=10,
+        min=0,
+        help="""
+TTL in seconds for cached resource provider usage data.
+
+The AcceleratorWeigher fetches usage data from Placement for each child
+resource provider. This option controls how long fetched usage data is
+reused across scheduling passes before being refreshed.
+
+Set to 0 to disable cross-pass caching (usage is still cached within
+a single scheduling pass via the per-pass cache).
+
+Possible values:
+
+* A non-negative integer, where the integer corresponds to cache TTL
+  in seconds.
+"""),
+    cfg.IntOpt(
+        "max_concurrent_usage_requests",
+        default=8,
+        min=1,
+        help="""
+Maximum number of concurrent HTTP requests for fetching RP usages.
+
+The AcceleratorWeigher fetches usage data for each child resource provider
+under a compute host's root RP. This option controls how many of these
+requests run in parallel using a thread pool.
+
+Higher values reduce wall-clock time for hosts with many child RPs
+(e.g., multiple GPUs/FPGAs) but increase concurrent load on Placement.
+
+Possible values:
+
+* A positive integer.
+"""),
     cfg.BoolOpt(
         "trace",
         default=False,

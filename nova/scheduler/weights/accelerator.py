@@ -17,8 +17,10 @@ Tracing:
 """
 
 import re
+import threading
 import time
 import pprint
+from concurrent import futures
 from typing import Dict, List, Optional, Tuple, Set
 from urllib.parse import quote
 
@@ -100,9 +102,10 @@ def _lookup_root_rp_uuid(client: placement_report.SchedulerReportClient, host_st
     return root_uuid
 
 
-def _get_provider_tree_and_usages(client: placement_report.SchedulerReportClient, root_uuid: str, stats: Dict) -> Tuple[Optional[provider_tree.ProviderTree], Dict[str, Dict[str, float]]]:
+def _get_provider_tree_and_usages(client: placement_report.SchedulerReportClient, root_uuid: str, stats: Dict, skip_usages: bool = False) -> Tuple[Optional[provider_tree.ProviderTree], Dict[str, Dict[str, float]]]:
     """Get ProviderTree using get_provider_tree_and_ensure_root() and collect usages.
 
+    :param skip_usages: If True, skip fetching usage data (caller has cached usages).
     Returns:
         Tuple of (ProviderTree, usages_dict) where usages_dict maps rp_uuid -> {rc: usage}
     """
@@ -133,23 +136,40 @@ def _get_provider_tree_and_usages(client: placement_report.SchedulerReportClient
         stats["errors"].append("root-not-in-tree")
         return None, {}
 
-    # Collect usage information (not included in ProviderTree)
-    usages_dict = {}  # rp_uuid -> {rc: usage}
-    for rp_uuid in provider_uuids:
-        if rp_uuid == root_uuid:
-            continue
+    if skip_usages:
+        _trace("Skipping usage fetch (caller has cached usages)")
+        return ptree, {}
 
+    # Collect usage information (not included in ProviderTree).
+    # Fetch concurrently to reduce wall-clock time for hosts with many child RPs.
+    child_uuids = [u for u in provider_uuids if u != root_uuid]
+    max_workers = min(
+        CONF.accelerator_weigher.max_concurrent_usage_requests,
+        len(child_uuids) or 1)
+    stats_lock = threading.Lock()
+
+    def _fetch_usage(rp_uuid):
         t0 = time.time()
-        usage_url = f"/resource_providers/{rp_uuid}/usages"
-        _trace("HTTP GET %s", usage_url)
-        usage_resp = client.get(usage_url)
+        url = f"/resource_providers/{rp_uuid}/usages"
+        _trace("HTTP GET %s", url)
+        resp = client.get(url)
         dt = (time.time() - t0) * 1000.0
-        stats["http_calls"] = stats.get("http_calls", 0) + 1
-        stats["http_times_ms"] = stats.get("http_times_ms", 0.0) + dt
+        with stats_lock:
+            stats["http_calls"] = stats.get("http_calls", 0) + 1
+            stats["http_times_ms"] = stats.get("http_times_ms", 0.0) + dt
+        if resp.status_code == 200:
+            return rp_uuid, (resp.json() or {}).get("usages", {}) or {}
+        return rp_uuid, {}
 
-        if usage_resp.status_code == 200:
-            usages = (usage_resp.json() or {}).get("usages", {}) or {}
-            usages_dict[rp_uuid] = usages
+    usages_dict = {}
+    _trace("Fetching usages for %d child RPs (max_workers=%d)", len(child_uuids), max_workers)
+    t_usage_start = time.time()
+    with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for rp_uuid, usages in executor.map(_fetch_usage, child_uuids):
+            if usages:
+                usages_dict[rp_uuid] = usages
+    stats["usage_fetch_ms"] = (time.time() - t_usage_start) * 1000.0
+    _trace("Usage fetch complete: %d RPs in %.1f ms", len(usages_dict), stats["usage_fetch_ms"])
 
     return ptree, usages_dict
 
@@ -330,6 +350,9 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
         # Per-scheduling-pass cache: {root_uuid: (ptree, usages_dict)}
         # Cleared at the start of each weigh_objects() call to avoid stale data.
         self._pass_cache = {}
+        # Cross-pass TTL cache for usage data: {root_uuid: (timestamp, usages_dict)}
+        # Persists across weigh_objects() calls; entries expire after usage_cache_seconds.
+        self._usage_cache = {}
 
     def weigh_objects(self, weighed_obj_list, weight_properties):
         """Clear per-pass cache before weighing a new set of hosts."""
@@ -397,13 +420,28 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
         # Use per-pass cache to avoid redundant Placement calls for the same root RP.
         if root_uuid in self._pass_cache:
             ptree, usages_dict = self._pass_cache[root_uuid]
-            stats["cache_hit"] = True
-            _trace("Cache hit for root_uuid=%s (skipped ProviderTree + usage HTTP calls)", root_uuid)
+            stats["cache_hit"] = "pass"
+            _trace("Pass-cache hit for root_uuid=%s", root_uuid)
         else:
-            ptree, usages_dict = _get_provider_tree_and_usages(client, root_uuid, stats=stats)
+            # Check TTL cache for usage data to avoid re-fetching across passes.
+            ttl = CONF.accelerator_weigher.usage_cache_seconds
+            cached_entry = self._usage_cache.get(root_uuid)
+            if cached_entry and ttl > 0 and (time.time() - cached_entry[0]) < ttl:
+                cached_usages = cached_entry[1]
+                stats["cache_hit"] = "ttl"
+                _trace("TTL-cache hit for root_uuid=%s (age=%.1fs, ttl=%ds)",
+                       root_uuid, time.time() - cached_entry[0], ttl)
+                # Still need a fresh ProviderTree (inventories/traits may change)
+                ptree, _ = _get_provider_tree_and_usages(client, root_uuid, stats=stats, skip_usages=True)
+                usages_dict = cached_usages
+            else:
+                ptree, usages_dict = _get_provider_tree_and_usages(client, root_uuid, stats=stats)
+                stats["cache_hit"] = False
+                # Update TTL cache
+                if ptree and ttl > 0:
+                    self._usage_cache[root_uuid] = (time.time(), usages_dict)
             if ptree:
                 self._pass_cache[root_uuid] = (ptree, usages_dict)
-            stats["cache_hit"] = False
         if not ptree:
             LOG.debug("Failed to build ProviderTree for host=%s; returning 0", host_name)
             _trace("==== weigh_object END (no ProviderTree) host=%r ====", host_name)
