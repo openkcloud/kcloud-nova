@@ -354,6 +354,17 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
 
     minval = 0
 
+    def __init__(self):
+        super().__init__()
+        # Per-scheduling-pass cache: {root_uuid: (ptree, usages_dict)}
+        # Cleared at the start of each weigh_objects() call to avoid stale data.
+        self._pass_cache = {}
+
+    def weigh_objects(self, weighed_obj_list, weight_properties):
+        """Clear per-pass cache before weighing a new set of hosts."""
+        self._pass_cache = {}
+        return super().weigh_objects(weighed_obj_list, weight_properties)
+
     def weight_multiplier(self, host_state):
         return CONF.accelerator_weigher.accelerator_weight_multiplier
 
@@ -385,7 +396,15 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
         client = _get_client()
         rc_regex = _get_rc_regex()
 
-        root_uuid = _lookup_root_rp_uuid(client, host_state, stats=stats)
+        # Use host_state.uuid directly as root RP UUID (compute node UUID ==
+        # root resource provider UUID in Placement), falling back to HTTP lookup.
+        root_uuid = getattr(host_state, 'uuid', None)
+        if root_uuid:
+            _trace("Using host_state.uuid=%s as root RP UUID (skipped HTTP lookup)", root_uuid)
+            stats["root_rp_source"] = "host_state.uuid"
+        else:
+            root_uuid = _lookup_root_rp_uuid(client, host_state, stats=stats)
+            stats["root_rp_source"] = "http_lookup"
         if not root_uuid:
             LOG.debug("No root RP for host=%s; returning 0", host_name)
             _trace("==== weigh_object END (no root RP) host=%r ====", host_name)
@@ -397,8 +416,16 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
             _trace("==== weigh_object END (no accel groups) host=%r ====", host_name)
             return 0.0
 
-        # Get ProviderTree once and reuse for all groups
-        ptree, usages_dict = _get_provider_tree_and_usages(client, root_uuid, stats=stats)
+        # Use per-pass cache to avoid redundant Placement calls for the same root RP.
+        if root_uuid in self._pass_cache:
+            ptree, usages_dict = self._pass_cache[root_uuid]
+            stats["cache_hit"] = True
+            _trace("Cache hit for root_uuid=%s (skipped ProviderTree + usage HTTP calls)", root_uuid)
+        else:
+            ptree, usages_dict = _get_provider_tree_and_usages(client, root_uuid, stats=stats)
+            if ptree:
+                self._pass_cache[root_uuid] = (ptree, usages_dict)
+            stats["cache_hit"] = False
         if not ptree:
             LOG.debug("Failed to build ProviderTree for host=%s; returning 0", host_name)
             _trace("==== weigh_object END (no ProviderTree) host=%r ====", host_name)
