@@ -54,6 +54,9 @@ Related options:
         help="""
 Scoring policy for accelerator weighing.
 
+This is the default policy. It can be overridden per request via the
+flavor extra_spec ``accelerator_weigher:policy``.
+
 Possible values:
 
 * ``sum-fit``: Score is the sum of group slacks across all request groups.

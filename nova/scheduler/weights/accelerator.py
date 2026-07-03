@@ -36,6 +36,9 @@ CONF = nova.conf.CONF
 
 EPS = 1e-6
 UNMET_FLOOR = -1e6
+VALID_POLICIES = frozenset({
+    "sum-fit", "product-fit",
+})
 
 _rc_regex_cache = None
 _rc_regex_pattern = None
@@ -403,21 +406,41 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
 
         return ptree, usages_dict
 
-    def _apply_policy(self, group_slacks):
-        """Compute final score from group slacks using configured policy.
+    def _get_policy(self, weight_properties):
+        """Resolve scoring policy: flavor extra_spec override or config default.
+
+        Flavor extra_spec key: ``accelerator_weigher:policy``
+        """
+        flavor = getattr(weight_properties, 'flavor', None)
+        if flavor:
+            extra_specs = getattr(flavor, 'extra_specs', None) or {}
+            override = extra_specs.get('accelerator_weigher:policy')
+            if override and override in VALID_POLICIES:
+                _trace("Policy override from flavor extra_spec: %s", override)
+                return override
+        return CONF.accelerator_weigher.policy
+
+    def _apply_policy(self, group_slacks, policy=None):
+        """Compute final score from group slacks using the given policy.
+
+        Supported policies: sum-fit, product-fit.
 
         Returns: float score, or UNMET_FLOOR if any group is unmet.
         """
+        if policy is None:
+            policy = CONF.accelerator_weigher.policy
+
         if any(gs == UNMET_FLOOR for gs in group_slacks):
             return UNMET_FLOOR
 
-        policy = CONF.accelerator_weigher.policy
         if policy == "sum-fit":
             score = sum(group_slacks)
-        else:  # product-fit
+        elif policy == "product-fit":
             score = 1.0
             for gs in group_slacks:
                 score *= (gs + EPS)
+        else:
+            score = sum(group_slacks)  # fallback
 
         _trace("policy=%s slacks=%s -> score=%.6f",
                policy, group_slacks, score)
@@ -467,7 +490,10 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
             LOG.debug("No root RP for host=%s; returning 0", host_name)
             return 0.0
 
-        # 2. Extract accelerator request groups
+        # 2. Resolve policy (flavor extra_spec override or config default)
+        policy = self._get_policy(weight_properties)
+
+        # 3. Extract accelerator request groups
         rc_regex = _get_rc_regex()
         groups = _extract_accel_groups(weight_properties, rc_regex, stats=stats)
         if not groups:
@@ -475,7 +501,7 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
                       host_name)
             return 0.0
 
-        # 3. Fetch ProviderTree + usages
+        # 4. Fetch ProviderTree + usages
         ptree, usages_dict = self._fetch_data(root_uuid, client, stats)
         if not ptree:
             LOG.debug("Failed to build ProviderTree for host=%s; returning 0",
@@ -489,7 +515,7 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
             LOG.debug("Root %s not found in ProviderTree", root_uuid)
             return 0.0
 
-        # 4. Compute per-group slack
+        # 5. Compute per-group slacks and apply the scoring policy
         group_slacks = []
         for idx, (accel_resources, req_traits) in enumerate(groups):
             _trace("Processing group[%d] on host=%s", idx, host_name)
@@ -498,14 +524,12 @@ class AcceleratorWeigher(weights.BaseHostWeigher):
                 usages_dict, stats=stats, provider_uuids=provider_uuids)
             group_slacks.append(gs)
             _trace("group[%d] -> slack=%.3f", idx, gs)
-
-        # 5. Apply scoring policy
-        score = self._apply_policy(group_slacks)
+        score = self._apply_policy(group_slacks, policy=policy)
 
         LOG.debug(
             "AcceleratorWeigher host=%s root_rp=%s policy=%s "
             "groups=%d slacks=%s score=%.6f",
-            host_name, root_uuid, CONF.accelerator_weigher.policy,
+            host_name, root_uuid, policy,
             len(group_slacks), group_slacks, score)
 
         self._build_stats(

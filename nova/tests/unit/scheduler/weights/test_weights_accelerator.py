@@ -765,3 +765,84 @@ class AcceleratorWeigherTestCase(test.NoDBTestCase):
         # This tests the BaseWeigher.minval=0 setting
         weigher = accelerator.AcceleratorWeigher()
         self.assertEqual(0, weigher.minval)
+
+    # ---------- Flavor-driven dynamic policy ----------
+
+    def test_flavor_policy_override(self):
+        """Flavor extra_spec overrides global config policy."""
+        # Global config = sum-fit
+        self.flags(policy='sum-fit', group='accelerator_weigher')
+        root_uuid = 'root-1'
+
+        self._setup_provider_tree(
+            root_uuid,
+            {
+                'child-1': FakeProviderData(
+                    inventory={'PGPU': {'total': 6, 'reserved': 0}},
+                    traits=set()),
+                'child-2': FakeProviderData(
+                    inventory={'FPGA': {'total': 3, 'reserved': 0}},
+                    traits=set()),
+            },
+            usages_dict={
+                'child-1': {'PGPU': 0},
+                'child-2': {'FPGA': 1},
+            })
+
+        host = self._make_host('host1', 'node1', root_uuid)
+
+        # Create spec with flavor extra_spec overriding to product-fit
+        spec = self._make_spec([
+            ({"PGPU": 2}, set()),  # slack = 6 - 2 = 4
+            ({"FPGA": 1}, set()),  # slack = 2 - 1 = 1
+        ])
+        # Attach flavor with extra_specs
+        spec.flavor = type('FakeFlavor', (), {
+            'extra_specs': {'accelerator_weigher:policy': 'product-fit'}
+        })()
+
+        score = self.accel_weigher._weigh_object(host, spec)
+        # With product-fit (from flavor override): (4+eps)*(1+eps) ~= 4
+        # With sum-fit (global config): 4 + 1 = 5
+        self.assertAlmostEqual(4.0, score, places=4)
+
+    def test_flavor_invalid_policy_falls_back_to_config(self):
+        """Invalid flavor policy value falls back to global config."""
+        self.flags(policy='sum-fit', group='accelerator_weigher')
+        root_uuid = 'root-1'
+
+        self._setup_provider_tree(
+            root_uuid,
+            {'child-1': FakeProviderData(
+                inventory={'PGPU': {'total': 4, 'reserved': 0}},
+                traits=set())},
+            usages_dict={'child-1': {'PGPU': 0}})
+
+        host = self._make_host('host1', 'node1', root_uuid)
+        spec = self._make_spec([({"PGPU": 1}, set())])
+        spec.flavor = type('FakeFlavor', (), {
+            'extra_specs': {'accelerator_weigher:policy': 'invalid-policy'}
+        })()
+
+        score = self.accel_weigher._weigh_object(host, spec)
+        # Falls back to sum-fit: slack = 4 - 1 = 3
+        self.assertEqual(3.0, score)
+
+    def test_flavor_no_extra_specs_uses_config(self):
+        """When flavor has no extra_specs, use global config."""
+        self.flags(policy='product-fit', group='accelerator_weigher')
+        root_uuid = 'root-1'
+
+        self._setup_provider_tree(
+            root_uuid,
+            {'child-1': FakeProviderData(
+                inventory={'PGPU': {'total': 5, 'reserved': 0}},
+                traits=set())},
+            usages_dict={'child-1': {'PGPU': 1}})
+
+        host = self._make_host('host1', 'node1', root_uuid)
+        spec = self._make_spec([({"PGPU": 2}, set())])
+        # No flavor attribute at all
+        score = self.accel_weigher._weigh_object(host, spec)
+        # product-fit: (2 + EPS) ≈ 2.0
+        self.assertAlmostEqual(2.0, score, places=4)
